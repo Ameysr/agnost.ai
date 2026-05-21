@@ -202,7 +202,7 @@ export default function App() {
                   <span className="text-xs text-slate-400 font-semibold tracking-wide uppercase">Records:</span>
                   <select
                     value={limit}
-                    onChange={(e) => setLimit(Number(e.target.value))}
+                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setLimit(Number(e.target.value))}
                     className="bg-transparent text-xs font-bold text-slate-200 focus:outline-none cursor-pointer"
                   >
                     <option value={100} className="bg-slate-950">100 Queries</option>
@@ -326,7 +326,7 @@ export default function App() {
                 <span className="text-xs text-slate-500 font-semibold tracking-wide uppercase">Volume Limit:</span>
                 <select
                   value={limit}
-                  onChange={(e) => setLimit(Number(e.target.value))}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setLimit(Number(e.target.value))}
                   className="bg-transparent text-xs font-bold text-slate-300 focus:outline-none cursor-pointer"
                 >
                   <option value={100} className="bg-slate-950">100 Queries</option>
