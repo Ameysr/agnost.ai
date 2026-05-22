@@ -10,12 +10,13 @@ import torch
 torch.set_num_threads(2)
 
 # Import our pipeline modules and schemas
+from starlette.concurrency import run_in_threadpool
 from data.loader import load_customer_support_dataset
 from pipeline.preprocess import preprocess_conversations
 from pipeline.embed import embed_messages, load_embedding_model
 from pipeline.cluster import cluster_messages
-from pipeline.label import generate_cluster_label_with_llm
-from pipeline.sentiment import analyze_cluster_sentiment, load_sentiment_pipeline
+from pipeline.label import generate_cluster_label_with_llm, label_all_clusters_async
+from pipeline.sentiment import analyze_cluster_sentiment, load_sentiment_pipeline, analyze_messages_sentiment_bulk
 from models.schemas import AnalyzeRequest, AnalysisResult, ClusterInsight
 
 # Configure Logging
@@ -77,13 +78,13 @@ app.add_middleware(
 @app.post("/api/analyze", response_model=AnalysisResult)
 async def analyze(body: AnalyzeRequest = AnalyzeRequest()):
     """
-    Executes the entire end-to-end Sentiment Analytics pipeline:
-    1. Downloads/Loads raw conversation dataset (Bitext HuggingFace)
-    2. Cleans text, strips agent, normalizes and filters PII / short items
-    3. Encodes queries into 384-dim dense vectors (all-MiniLM-L6-v2)
-    4. Projects vectors to 5 dims with UMAP and clusters with HDBSCAN
-    5. Summarizes topic intent with GPT-OSS-120B on Groq API
-    6. Scores message sentiments with DistilBERT and aggregates
+    Executes the entire end-to-end Sentiment Analytics pipeline using production-grade thread offloading:
+    1. Downloads/Loads raw conversation dataset (uses local cache for instant retrieval if available)
+    2. Cleans text and filters PII / short items (threaded)
+    3. Encodes queries into 384-dim dense vectors on optimal GPU/CPU (threaded)
+    4. Projects vectors and clusters with HDBSCAN and KMeans fallback if quality is low (threaded)
+    5. Scores all queries in a single high-throughput batch pass (threaded)
+    6. Summarizes topic intent with safe-throttled AsyncGroq concurrent API calls
     7. Caches the result in memory
     """
     global _analysis_cache
@@ -92,19 +93,19 @@ async def analyze(body: AnalyzeRequest = AnalyzeRequest()):
     if not getattr(app.state, "models_loaded", False):
         logger.error("POST /api/analyze called but models not preloaded.")
         raise HTTPException(
-            status_code=503,
-            detail="Machine learning components are unavailable (startup loading failed)."
+             status_code=503,
+             detail="Machine learning components are unavailable (startup loading failed)."
         )
         
     start_time = time.time()
-    logger.info(f"Received request to run full pipeline with limit={body.limit}")
+    logger.info(f"Received request to run optimized pipeline with limit={body.limit}")
     
     try:
-        # Stage 1: Load Raw Dataset
-        raw_queries = load_customer_support_dataset(limit=body.limit)
+        # Stage 1: Load Raw Dataset (uses local cache internally)
+        raw_queries = await run_in_threadpool(load_customer_support_dataset, limit=body.limit)
         
-        # Stage 2: Preprocess & Filter
-        clean_queries = preprocess_conversations(raw_queries)
+        # Stage 2: Preprocess & Filter (CPU-heavy, offloaded to thread pool)
+        clean_queries = await run_in_threadpool(preprocess_conversations, raw_queries)
         if not clean_queries:
             logger.warning("Preprocessing filtered out all raw queries.")
             raise HTTPException(
@@ -112,38 +113,64 @@ async def analyze(body: AnalyzeRequest = AnalyzeRequest()):
                 detail="All messages were filtered out during preprocessing. Check data quality or increase limit."
             )
             
-        # Stage 3: Embedding
-        embeddings = embed_messages(clean_queries)
+        # Stage 3: Embedding generation (CPU/GPU-heavy, offloaded to thread pool)
+        embeddings = await run_in_threadpool(embed_messages, clean_queries)
         
-        # Stage 4: Clustering
-        clusters = cluster_messages(embeddings, clean_queries)
+        # Stage 4: Dimensionality Reduction and Clustering (CPU-heavy, offloaded to thread pool)
+        clusters = await run_in_threadpool(cluster_messages, embeddings, clean_queries)
         
-        # Stage 5 & 6: LLM Labeling and Sentiment Aggregation per Cluster
+        # Stage 5: Unified Bulk Sentiment scoring (Inference bulk batch pass offloaded to thread pool)
+        all_sentiments = await run_in_threadpool(analyze_messages_sentiment_bulk, clean_queries)
+        
+        # Map each query string back to its predicted sentiment dict
+        sentiment_map = {msg: res for msg, res in zip(clean_queries, all_sentiments)}
+        
+        # Stage 6: Concurrent Async LLM Labeling (Network-bound, safe-throttled using asyncio)
+        labels = await label_all_clusters_async(clusters)
+        
+        # Compile all cluster insights
         insights = []
         total_conversations = len(clean_queries)
         
         for cluster_id, cluster_msgs in clusters.items():
             count = len(cluster_msgs)
             pct = round((count / total_conversations) * 100, 1)
-            
-            # Sub-sample 3 messages for the React dashboard frontend
-            # We take the first 3 after preprocessing
             sample_messages = cluster_msgs[:3]
             
-            # Call Groq to generate action-oriented label
-            label = generate_cluster_label_with_llm(cluster_id, cluster_msgs)
+            # Lookup concurrent async generated label
+            label = labels.get(cluster_id, f"Cluster {cluster_id} - label unavailable")
             
-            # Analyze sentiment distribution
-            sentiment_summary = analyze_cluster_sentiment(cluster_msgs)
+            # Aggregate preloaded bulk sentiment records for messages in this cluster
+            pos_count = 0
+            neg_count = 0
+            for msg in cluster_msgs:
+                res = sentiment_map.get(msg, {"label": "POSITIVE"})
+                label_val = res["label"].upper()
+                if "POSITIVE" in label_val:
+                    pos_count += 1
+                else:
+                    neg_count += 1
+                    
+            cluster_len = len(cluster_msgs)
+            pos_pct = round((pos_count / cluster_len) * 100, 1) if cluster_len > 0 else 0.0
+            neg_pct = round((neg_count / cluster_len) * 100, 1) if cluster_len > 0 else 0.0
             
+            # Define overall sentiment class based on 60% thresholds
+            if neg_pct > 60.0:
+                overall_sentiment = "negative"
+            elif pos_pct > 60.0:
+                overall_sentiment = "positive"
+            else:
+                overall_sentiment = "mixed"
+                
             insight = ClusterInsight(
                 cluster_id=cluster_id,
                 label=label,
                 message_count=count,
                 percentage_of_total=pct,
-                sentiment=sentiment_summary["overall"],
-                positive_pct=sentiment_summary["positive_pct"],
-                negative_pct=sentiment_summary["negative_pct"],
+                sentiment=overall_sentiment,
+                positive_pct=pos_pct,
+                negative_pct=neg_pct,
                 sample_messages=sample_messages
             )
             insights.append(insight)
@@ -164,7 +191,7 @@ async def analyze(body: AnalyzeRequest = AnalyzeRequest()):
         
         # Cache results in-memory
         _analysis_cache = result
-        logger.info(f"Pipeline executed successfully in {duration}s. Results cached.")
+        logger.info(f"Optimized pipeline executed successfully in {duration}s. Results cached.")
         return result
         
     except HTTPException as he:

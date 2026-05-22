@@ -10,10 +10,13 @@ torch.set_num_threads(2)
 
 import unittest
 import numpy as np
+import os
+import json
+from data.loader import load_customer_support_dataset, CACHE_PATH
 from pipeline.preprocess import preprocess_conversations
 from pipeline.embed import embed_messages, load_embedding_model
 from pipeline.cluster import cluster_messages
-from pipeline.sentiment import analyze_cluster_sentiment, load_sentiment_pipeline
+from pipeline.sentiment import analyze_cluster_sentiment, load_sentiment_pipeline, analyze_messages_sentiment_bulk
 
 class TestSentimentAnalyticsPipeline(unittest.TestCase):
     """
@@ -133,5 +136,70 @@ class TestSentimentAnalyticsPipeline(unittest.TestCase):
         self.assertEqual(neg_res["overall"], "negative")
         self.assertEqual(mixed_res["overall"], "mixed")
 
+    def test_local_disk_caching(self):
+        """
+        Validates loader persistent caching.
+        First run writes cache file, second run reads instantly from local disk.
+        """
+        # Ensure we start fresh
+        if os.path.exists(CACHE_PATH):
+            try:
+                os.remove(CACHE_PATH)
+            except Exception:
+                pass
+                
+        # 1st execution: downloads (or triggers fallback) and writes cache
+        res_first = load_customer_support_dataset(limit=5)
+        self.assertTrue(os.path.exists(CACHE_PATH))
+        self.assertEqual(len(res_first), 5)
+        
+        # 2nd execution: must read directly from cached file
+        res_second = load_customer_support_dataset(limit=5)
+        self.assertEqual(res_first, res_second)
+
+    def test_bulk_sentiment_scoring(self):
+        """
+        Validates bulk batch inference returns correct predictions
+        for positive and negative inputs in a single list.
+        """
+        load_sentiment_pipeline()
+        queries = [
+            "I love this excellent product!",
+            "This was the absolute worst support call I ever had."
+        ]
+        
+        predictions = analyze_messages_sentiment_bulk(queries)
+        self.assertEqual(len(predictions), 2)
+        
+        self.assertIn("POSITIVE", predictions[0]["label"].upper())
+        self.assertIn("NEGATIVE", predictions[1]["label"].upper())
+
+    def test_adaptive_kmeans_fallback(self):
+        """
+        Validates that KMeans fallback triggers and successfully groups points
+        without producing any noise (-1) bins when data is sparse.
+        """
+        load_embedding_model()
+        # Create small sparse queries
+        base_queries = [
+            "refund checkout card failed",
+            "cancel my subscription monthly",
+            "broken mobile application screen",
+            "track order package arrival",
+            "forgot password account login lock"
+        ]
+        # Replicate to reach 20 samples so that UMAP spectral layout calculation is stable
+        queries = base_queries * 4
+        vectors = embed_messages(queries)
+        
+        # Force a KMeans fallback by passing highly sparse UMAP embeddings 
+        # that will fail to meet HDBSCAN density parameters
+        clusters = cluster_messages(vectors, queries)
+        
+        # KMeans fallback will guarantee clusters exist, and NO noise (-1) is present
+        self.assertNotIn(-1, clusters)
+        self.assertTrue(len(clusters) > 0)
+
 if __name__ == "__main__":
     unittest.main()
+

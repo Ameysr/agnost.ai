@@ -52,3 +52,7 @@ htmlcov/
 *.sw?
 .DS_Store
 Thumbs.db
+
+# Local dataset cache
+sentiment-engine/backend/data/cached_support_dataset.json
+
