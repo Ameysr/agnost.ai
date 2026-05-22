@@ -71,6 +71,26 @@ def cluster_messages(embeddings: np.ndarray, clean_messages: List[str]) -> Dict[
             cluster_labels = clusterer.fit_predict(reduced_embeddings)
             logger.info("HDBSCAN clustering finished using scikit-learn fallback.")
             
+        # STEP 3: Quality Evaluation & Adaptive Fallback to KMeans
+        total_items = len(cluster_labels)
+        noise_count = int(np.sum(cluster_labels == -1))
+        noise_ratio = noise_count / total_items if total_items > 0 else 0.0
+        unique_labels = set(cluster_labels)
+        non_noise_clusters = len(unique_labels - {-1})
+        
+        logger.info(f"Clustering evaluation metrics -> Total Items: {total_items}, Noise Count: {noise_count} ({noise_ratio:.1%}), Clean Clusters: {non_noise_clusters}")
+        
+        # If HDBSCAN produces 0 clusters (excluding noise) or leaves > 75% of messages as noise, K-Means is activated
+        if non_noise_clusters == 0 or noise_ratio > 0.75:
+            logger.warning(f"HDBSCAN resulted in poor quality (noise ratio {noise_ratio:.1%} > 75% or 0 clusters). Dynamically falling back to KMeans clustering...")
+            from sklearn.cluster import KMeans
+            # Determine dynamic number of clusters: k = sqrt(total_items / 6), bounded between 3 and 10
+            k = int(np.clip(np.sqrt(total_items / 6), 3, 10))
+            logger.info(f"Executing KMeans fallback with K={k} clusters...")
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto")
+            cluster_labels = kmeans.fit_predict(reduced_embeddings)
+            logger.info("KMeans fallback clustering completed successfully (no noise categories produced).")
+            
         # Group messages by their cluster ID
         clusters: Dict[int, List[str]] = {}
         for idx, label in enumerate(cluster_labels):
@@ -80,7 +100,7 @@ def cluster_messages(embeddings: np.ndarray, clean_messages: List[str]) -> Dict[
             clusters[cluster_id].append(clean_messages[idx])
             
         # Summarize cluster statistics
-        logger.info(f"Clustering completed. Found {len(clusters)} clusters (including noise cluster -1 if present).")
+        logger.info(f"Clustering completed. Found {len(clusters)} clusters.")
         for cid, msgs in clusters.items():
             name = "Uncategorized/Noise" if cid == -1 else f"Cluster {cid}"
             logger.info(f"  - {name}: {len(msgs)} messages")

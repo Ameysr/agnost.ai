@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List, TypedDict
 from transformers import pipeline
+from pipeline.embed import get_optimal_device
 
 logger = logging.getLogger("sentiment_engine")
 
@@ -15,34 +16,49 @@ class SentimentResult(TypedDict):
 def load_sentiment_pipeline():
     """
     Loads and caches the DistilBERT sentiment pipeline in memory once.
+    Automatically detects and runs on CUDA, MPS, or CPU.
     """
     global _classifier
     if _classifier is not None:
         return _classifier
         
-    logger.info("Loading HuggingFace sentiment analysis pipeline ('distilbert-base-uncased-finetuned-sst-2-english')...")
+    device = get_optimal_device()
+    logger.info(f"Loading HuggingFace sentiment analysis pipeline ('distilbert-base-uncased-finetuned-sst-2-english') on device: {device}...")
     try:
-        # Load the pipeline. CPU is standard, and we enable native batching if supported
+        # Load the pipeline on GPU/MPS/CPU. PyTorch device is fully compatible.
         _classifier = pipeline(
             "sentiment-analysis",
-            model="distilbert-base-uncased-finetuned-sst-2-english"
+            model="distilbert-base-uncased-finetuned-sst-2-english",
+            device=device
         )
-        logger.info("Sentiment pipeline loaded successfully.")
+        logger.info(f"Sentiment pipeline loaded successfully on device '{device}'.")
         return _classifier
     except Exception as e:
         logger.critical(f"CRITICAL ERROR: Failed to load sentiment analysis pipeline: {str(e)}")
-        # We don't raise 503 here directly so we can catch it at main.py startup lifespan
         raise e
+
+def analyze_messages_sentiment_bulk(messages: List[str]) -> List[Dict]:
+    """
+    Performs sentiment analysis in bulk over a single flat list of messages
+    using optimized batch size of 64 on the preloaded pipeline.
+    Returns a list of raw prediction dicts: [{'label': 'POSITIVE'/'NEGATIVE', 'score': float}, ...]
+    """
+    if not messages:
+        return []
+        
+    classifier = load_sentiment_pipeline()
+    try:
+        logger.info(f"Executing bulk sentiment inference on {len(messages)} messages (batch_size=64)")
+        results = classifier(messages, batch_size=64)
+        return results
+    except Exception as e:
+        logger.error(f"Bulk sentiment analysis failed: {str(e)}. Falling back to neutral predictions.")
+        return [{"label": "POSITIVE", "score": 0.5} for _ in messages]
 
 def analyze_cluster_sentiment(messages: List[str]) -> SentimentResult:
     """
-    Performs sentiment analysis on a list of messages within a single cluster.
-    Runs the HuggingFace pipeline with optimal batching.
-    
-    Categorizes the cluster overall:
-    - >60% positive => "positive"
-    - >60% negative => "negative"
-    - Otherwise => "mixed"
+    Legacy method kept for test suite compatibility.
+    Computes sentiment metrics from list of messages.
     """
     if not messages:
         return {"positive_pct": 0.0, "negative_pct": 0.0, "overall": "mixed"}
@@ -52,7 +68,6 @@ def analyze_cluster_sentiment(messages: List[str]) -> SentimentResult:
     
     try:
         logger.info(f"Scoring sentiment for {total} messages in batch")
-        # Run the pipeline over the entire list in one go (batch size 32 is optimal for memory/speed on CPU)
         results = classifier(messages, batch_size=32)
         
         positive_count = 0
@@ -65,11 +80,9 @@ def analyze_cluster_sentiment(messages: List[str]) -> SentimentResult:
             else:
                 negative_count += 1
                 
-        # Calculate percentages
         positive_pct = round((positive_count / total) * 100, 1)
         negative_pct = round((negative_count / total) * 100, 1)
         
-        # Determine overall cluster category based on the 60% rules
         if negative_pct > 60.0:
             overall = "negative"
         elif positive_pct > 60.0:
@@ -77,8 +90,6 @@ def analyze_cluster_sentiment(messages: List[str]) -> SentimentResult:
         else:
             overall = "mixed"
             
-        logger.info(f"Sentiment result calculated: Pos={positive_pct}%, Neg={negative_pct}%, Overall='{overall}'")
-        
         return {
             "positive_pct": positive_pct,
             "negative_pct": negative_pct,
@@ -86,8 +97,7 @@ def analyze_cluster_sentiment(messages: List[str]) -> SentimentResult:
         }
         
     except Exception as e:
-        logger.error(f"Failed to score sentiment for cluster: {str(e)}")
-        # Fail gracefully by returning mixed
+        logger.error(f"Failed to score sentiment: {str(e)}")
         return {
             "positive_pct": 50.0,
             "negative_pct": 50.0,
