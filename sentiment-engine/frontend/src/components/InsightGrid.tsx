@@ -11,7 +11,7 @@ export const InsightGrid: React.FC<InsightGridProps> = ({ insights }) => {
   const sortedInsights = [...insights].sort((a, b) => b.message_count - a.message_count);
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
       {sortedInsights.map((insight) => (
         <InsightCard key={insight.cluster_id} insight={insight} />
       ))}

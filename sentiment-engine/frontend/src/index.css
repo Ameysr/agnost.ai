@@ -4,41 +4,58 @@
 
 @layer base {
   html, body {
-    @apply bg-slate-950 text-slate-100 font-sans antialiased;
+    @apply bg-black text-white font-sans antialiased;
   }
 }
 
-/* Custom glowing effects and animations for the premium dashboard */
-@keyframes pulse-glow {
+/* Custom minimal glowing effects and animations */
+@keyframes shimmer-glow {
   0%, 100% {
-    box-shadow: 0 0 15px 2px rgba(14, 165, 233, 0.2);
-    border-color: rgba(14, 165, 233, 0.4);
+    box-shadow: 0 0 10px 1px rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.1);
   }
   50% {
-    box-shadow: 0 0 25px 5px rgba(99, 102, 241, 0.4);
-    border-color: rgba(99, 102, 241, 0.6);
+    box-shadow: 0 0 20px 3px rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.3);
   }
 }
 
 .glowing-btn {
-  animation: pulse-glow 3s infinite ease-in-out;
+  animation: shimmer-glow 4s infinite ease-in-out;
 }
 
-/* Custom scrollbar styling */
+/* Sophisticated animations */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Custom minimal scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #020617;
+  background: #000000;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #27272a;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #3f3f46;
 }
+

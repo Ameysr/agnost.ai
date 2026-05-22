@@ -33,23 +33,23 @@ export const VolumeChart: React.FC<VolumeChartProps> = ({ insights }) => {
   const getBarColor = (sentiment: string) => {
     switch (sentiment) {
       case "positive":
-        return "#10b981"; // Emerald 500
+        return "#ffffff"; // Pure white
       case "negative":
-        return "#f43f5e"; // Rose 500
+        return "#52525b"; // Zinc 600
       case "mixed":
       default:
-        return "#eab308"; // Amber 500
+        return "#a1a1aa"; // Zinc 400
     }
   };
 
   return (
-    <div className="w-full bg-slate-900/60 backdrop-blur-md rounded-2xl border border-slate-800 p-6 shadow-xl shadow-indigo-950/20">
+    <div className="w-full bg-zinc-950 backdrop-blur-md rounded-2xl border border-zinc-900 p-6 shadow-xl hover:shadow-2xl transition-shadow duration-300">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h3 className="text-lg font-bold text-slate-100 tracking-tight font-sans">
+          <h3 className="text-lg font-bold text-white tracking-tight font-sans">
             Cluster Intent Distribution
           </h3>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-zinc-500 mt-1">
             Total message volume segmented by specific topic clusters
           </p>
         </div>
@@ -57,16 +57,16 @@ export const VolumeChart: React.FC<VolumeChartProps> = ({ insights }) => {
 
       <div className="w-full h-64">
         {data.length === 0 ? (
-          <div className="w-full h-full flex items-center justify-center text-slate-500">
+          <div className="w-full h-full flex items-center justify-center text-zinc-600">
             No data available
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.4} vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" opacity={0.5} vertical={false} />
               <XAxis
                 dataKey="name"
-                stroke="#64748b"
+                stroke="#71717a"
                 fontSize={10}
                 fontWeight={500}
                 tickLine={false}
@@ -74,7 +74,7 @@ export const VolumeChart: React.FC<VolumeChartProps> = ({ insights }) => {
                 dy={8}
               />
               <YAxis
-                stroke="#64748b"
+                stroke="#71717a"
                 fontSize={10}
                 fontWeight={500}
                 tickLine={false}
@@ -82,14 +82,14 @@ export const VolumeChart: React.FC<VolumeChartProps> = ({ insights }) => {
                 dx={-8}
               />
               <Tooltip
-                cursor={{ fill: "rgba(30, 41, 59, 0.2)", radius: 4 }}
+                cursor={{ fill: "rgba(39, 39, 42, 0.4)", radius: 4 }}
                 contentStyle={{
-                  backgroundColor: "#0f172a",
-                  borderColor: "#334155",
+                  backgroundColor: "#000000",
+                  borderColor: "#27272a",
                   borderRadius: "0.75rem",
-                  color: "#f8fafc",
+                  color: "#ffffff",
                   fontFamily: "Inter, sans-serif",
-                  boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.3)",
+                  boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.5)",
                 }}
                 formatter={(value) => [`${value} queries`, "Volume"]}
                 labelFormatter={(_, activePayload) => {
