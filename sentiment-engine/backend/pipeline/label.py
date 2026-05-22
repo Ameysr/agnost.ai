@@ -10,19 +10,19 @@ logger = logging.getLogger("sentiment_engine")
 def generate_cluster_label_with_llm(cluster_id: int, messages: List[str]) -> str:
     """
     Generates a single-sentence PM-ready summary for a list of messages in a cluster
-    using the Groq Llama3-8b-8192 model.
+    using the Groq openai/gpt-oss-120b model.
     Implements retry logic (2 retries with 1s delay) and a standard fallback.
     """
     # Noise cluster (-1) does not represent a cohesive group, so we bypass LLM
     if cluster_id == -1:
-        return "Uncategorized — Miscellaneous user queries"
+        return "Uncategorized - Miscellaneous user queries"
         
     api_key = os.environ.get("GROQ_API_KEY", "")
     
     # Degrade gracefully if no Groq API Key is configured
     if not api_key or api_key.startswith("gsk_your_groq_api_key"):
         logger.warning(f"GROQ_API_KEY is missing or invalid. Skipping LLM for Cluster {cluster_id}")
-        return f"Cluster {cluster_id} — label unavailable due to missing API key"
+        return f"Cluster {cluster_id} - label unavailable due to missing API key"
 
     # Sample up to 10 random messages to stay well within token limits and keep speed high
     sampled_messages = random.sample(messages, min(10, len(messages)))
@@ -31,30 +31,32 @@ def generate_cluster_label_with_llm(cluster_id: int, messages: List[str]) -> str
     prompt = f"""You are a product analytics assistant. 
 Below are customer messages from a single conversation cluster.
 Summarize what this cluster of users wants or is complaining about
-in ONE sentence. Format: "[Action verb] — [specific issue]"
+in ONE sentence. Format: "[Action verb] - [specific issue]"
 Examples: 
-"Requesting refund — order never delivered"
-"Reporting bug — payment fails at checkout"
+"Requesting refund - order never delivered"
+"Reporting bug - payment fails at checkout"
 
 Messages:
 {formatted_messages}
 
 Respond with ONLY the one-line summary. No explanation. No markdown styling. No extra words."""
 
-    client = Groq(api_key=api_key)
+    client = Groq()
     
     # Try the LLM call, retry up to 2 times (total 3 attempts) with a 1-second delay
     for attempt in range(3):
         try:
             logger.info(f"Sending Cluster {cluster_id} to Groq API (Attempt {attempt + 1}/3)")
             response = client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="openai/gpt-oss-120b",
                 messages=[
-                    {"role": "system", "content": "You are a direct, concise product feedback summarizer."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.0,
-                max_tokens=64
+                temperature=1,
+                max_completion_tokens=512,
+                top_p=1,
+                reasoning_effort="medium",
+                stop=None
             )
             
             label = response.choices[0].message.content.strip()
@@ -73,7 +75,7 @@ Respond with ONLY the one-line summary. No explanation. No markdown styling. No 
                 
     # Fallback if all attempts failed
     logger.error(f"All 3 LLM labeling attempts failed for Cluster {cluster_id}. Using fallback.")
-    return f"Cluster {cluster_id} — label unavailable"
+    return f"Cluster {cluster_id} - label unavailable"
 
 def label_all_clusters(clusters: Dict[int, List[str]]) -> Dict[int, str]:
     """

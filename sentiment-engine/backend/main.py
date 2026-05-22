@@ -5,6 +5,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+# Limit PyTorch to 2 CPU threads to prevent system overheating
+import torch
+torch.set_num_threads(2)
+
 # Import our pipeline modules and schemas
 from data.loader import load_customer_support_dataset
 from pipeline.preprocess import preprocess_conversations
@@ -78,7 +82,7 @@ async def analyze(body: AnalyzeRequest = AnalyzeRequest()):
     2. Cleans text, strips agent, normalizes and filters PII / short items
     3. Encodes queries into 384-dim dense vectors (all-MiniLM-L6-v2)
     4. Projects vectors to 5 dims with UMAP and clusters with HDBSCAN
-    5. Summarizes topic intent with Llama3 on Groq API
+    5. Summarizes topic intent with GPT-OSS-120B on Groq API
     6. Scores message sentiments with DistilBERT and aggregates
     7. Caches the result in memory
     """
@@ -200,4 +204,4 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8050, reload=True)
