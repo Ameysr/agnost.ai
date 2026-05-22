@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+import torch
 from fastapi import HTTPException
 from sentence_transformers import SentenceTransformer
 
@@ -8,20 +9,32 @@ logger = logging.getLogger("sentiment_engine")
 # Global reference to cache the model in memory
 _model = None
 
+def get_optimal_device() -> str:
+    """
+    Detects the best available hardware accelerator for PyTorch operations.
+    Returns 'cuda' for Nvidia GPUs, 'mps' for Apple Silicon, or 'cpu'.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    elif torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
 def load_embedding_model() -> SentenceTransformer:
     """
-    Loads and caches the all-MiniLM-L6-v2 model in memory.
+    Loads and caches the all-MiniLM-L6-v2 model in memory on the optimal hardware device.
     Raises an HTTP 503 error if the model fails to load.
     """
     global _model
     if _model is not None:
         return _model
         
-    logger.info("Loading SentenceTransformer model 'all-MiniLM-L6-v2' once at startup...")
+    device = get_optimal_device()
+    logger.info(f"Loading SentenceTransformer model 'all-MiniLM-L6-v2' once at startup on device: {device}")
     try:
-        # Load the model
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
-        logger.info("SentenceTransformer model loaded successfully.")
+        # Load the model on detected device
+        _model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+        logger.info(f"SentenceTransformer model loaded successfully on device '{device}'.")
         return _model
     except Exception as e:
         logger.critical(f"CRITICAL ERROR: Failed to load SentenceTransformer model: {str(e)}")

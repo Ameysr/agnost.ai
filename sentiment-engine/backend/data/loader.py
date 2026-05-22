@@ -1,15 +1,33 @@
+import os
+import json
 import logging
 from typing import List
 from datasets import load_dataset
 
 logger = logging.getLogger("sentiment_engine")
 
+# Define persistent local cache path relative to this file
+CACHE_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_PATH = os.path.join(CACHE_DIR, "cached_support_dataset.json")
+
 def load_customer_support_dataset(limit: int = 500) -> List[str]:
     """
-    Loads raw customer messages from the Bitext HuggingFace dataset.
-    Extracts the 'instruction' field representing the user's queries.
+    Loads raw customer messages.
+    First tries to read from a local disk cache for instant startup and offline resilience.
+    If no cache exists, downloads from HuggingFace Hub, caches it locally, and returns the queries.
     """
-    logger.info(f"Attempting to load {limit} records from HuggingFace dataset bitext/Bitext-customer-support-llm-chatbot-training-dataset")
+    # 1. Try reading from local disk cache
+    if os.path.exists(CACHE_PATH):
+        logger.info(f"Local dataset cache found at {CACHE_PATH}. Reading cached dataset...")
+        try:
+            with open(CACHE_PATH, "r", encoding="utf-8") as f:
+                all_messages = json.load(f)
+            logger.info(f"Successfully loaded {len(all_messages)} messages from local disk cache.")
+            return all_messages[:limit]
+        except Exception as e:
+            logger.warning(f"Failed to read local cache, falling back to network download: {str(e)}")
+
+    logger.info(f"No valid local cache found. Attempting to download from HuggingFace dataset bitext/Bitext-customer-support-llm-chatbot-training-dataset")
     try:
         # Load the dataset from HuggingFace Hub
         dataset = load_dataset("bitext/Bitext-customer-support-llm-chatbot-training-dataset")
@@ -22,16 +40,21 @@ def load_customer_support_dataset(limit: int = 500) -> List[str]:
         else:
             split_data = dataset["train"]
             
-        # Extract the instruction column (raw user messages)
-        messages = split_data["instruction"]
-        total_available = len(messages)
-        logger.info(f"Successfully loaded dataset. Total records available: {total_available}")
+        # Extract the instruction column (raw user messages) and cast to a list for JSON serializability
+        all_messages = list(split_data["instruction"])
+        total_available = len(all_messages)
+        logger.info(f"Successfully loaded dataset from HuggingFace. Total records: {total_available}")
         
-        # Apply the limit
-        sampled_messages = messages[:limit]
-        logger.info(f"Sampled {len(sampled_messages)} messages for analysis.")
-        
-        return sampled_messages
+        # Cache the entire dataset locally for future offline runs
+        try:
+            logger.info(f"Writing dataset to persistent disk cache at {CACHE_PATH}...")
+            with open(CACHE_PATH, "w", encoding="utf-8") as f:
+                json.dump(all_messages, f, ensure_ascii=False, indent=2)
+            logger.info("Persistent disk cache successfully written.")
+        except Exception as write_err:
+            logger.error(f"Failed to write local dataset cache: {str(write_err)}")
+            
+        return all_messages[:limit]
 
     except Exception as e:
         logger.error(f"Failed to load dataset from HuggingFace: {str(e)}")
@@ -59,3 +82,4 @@ def load_customer_support_dataset(limit: int = 500) -> List[str]:
         while len(result) < limit:
             result.extend(fallback_queries)
         return result[:limit]
+
