@@ -1,8 +1,8 @@
 import axios from "axios";
 import { AnalysisResult } from "../types/insight";
 
-// Use environment variable or fallback to localhost:8000
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// Use environment variable or fallback to localhost:8050 (port 8000 is often taken by Docker Desktop)
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8050";
 
 const api = axios.create({
   baseURL: API_URL,

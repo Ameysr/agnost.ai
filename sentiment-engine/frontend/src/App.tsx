@@ -59,7 +59,7 @@ export default function App() {
       "Generating 384-dimensional sentence embeddings via all-MiniLM-L6-v2...",
       "Executing UMAP dimensionality reduction (384 -> 5 dimensions)...",
       "Applying HDBSCAN algorithms to cluster dense conversations...",
-      "Querying Groq API (llama3-8b-8192) to generate PM-ready summaries...",
+      "Querying Groq API (gpt-oss-120b) to generate PM-ready summaries...",
       "Running DistilBERT sentiment scoring over all customer queries...",
       "Compiling aggregated metadata and formatting dashboard charts..."
     ];
@@ -317,7 +317,7 @@ export default function App() {
               Sentiment Analytics Pipeline
             </h2>
             <p className="text-sm text-slate-400 mt-3 max-w-md leading-relaxed font-sans">
-              Injest user messages from Hugging Face, compute vector spaces, cluster intent groupings using UMAP + HDBSCAN, and synthesize insights using llama3 on Groq.
+              Injest user messages from Hugging Face, compute vector spaces, cluster intent groupings using UMAP + HDBSCAN, and synthesize insights using GPT-OSS-120B on Groq.
             </p>
 
             {/* limit selection dropdown inside empty state */}
