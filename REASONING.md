@@ -137,32 +137,3 @@ Chosen: Minimal React SPA, no router, pure state-based navigation.
 | Recharts is declarative and composable, bar charts in 10 lines | D3.js requires manual DOM manipulation, heavy for simple bar charts |
 | Vite HMR makes iteration instant during development | CRA (Create React App) is deprecated with slow builds |
 | Tailwind utility classes keep styling co-located with markup | CSS modules or styled-components add indirection for a single-page UI |
-
-## What I Would Do Differently With a Month
-
-### Week 1: Persistent Storage and Run History
-
-Replace the flat NDJSON cache with PostgreSQL and store each pipeline run as a versioned snapshot. Schema: `runs(run_id, timestamp, limit, total_clusters, processing_time)` and `insights(run_id, cluster_id, label, message_count, sentiment, positive_pct, negative_pct)`. Build a run history selector in the UI to compare cluster drift across two dates side by side. Add a `GET /api/runs` endpoint returning paginated run history.
-
-### Week 2: Vector Database and Incremental Updates
-
-Swap in-memory embeddings for Qdrant (self-hosted, free) to persist vectors across restarts. Implement incremental ingestion so only messages added since the last run timestamp get re-embedded. Add a `POST /api/search` endpoint for finding messages semantically similar to a given complaint using Qdrant ANN search. Cache cluster centroids in Qdrant so new messages can be assigned to existing clusters without re-running UMAP.
-
-### Week 3: Production Hardening
-
-Add API key middleware on `/api/analyze` so no public endpoint is running heavy ML inference. Stream cluster labels to the frontend via Server-Sent Events as Groq finishes each one rather than waiting for all N clusters before the UI updates. Add per-IP throttling via `slowapi` to prevent the free-tier Groq key from being exhausted by repeated clicks. Set up GitHub Actions with `pytest` on every push, Docker build on merge to `main`, and a health check smoke test on deploy.
-
-### Week 4: Quality and Intelligence
-
-Fine-tune embeddings on the support domain using contrastive learning on intent pairs, which measurably improves cluster coherence. Auto-tune `min_cluster_size` based on dataset size via a lightweight grid search scored by silhouette coefficient. Add Slack or email notifications when a cluster volume spikes more than 20% versus the previous run for early issue detection. Build one-click CSV and PDF export of insights for PM handoff with cluster labels, message counts, sentiment breakdown, and sample messages.
-
-## Key Constraints Accepted for the Weekend Scope
-
-| Constraint | Decision | Production Fix |
-|---|---|---|
-| No database | NDJSON disk cache, O(limit) partial reads | PostgreSQL + Qdrant |
-| Free-tier Groq | Semaphore(2) throttle | Paid tier, Semaphore(10) |
-| No auth | Open /api/analyze endpoint | API key middleware |
-| Static dataset | HuggingFace download + local cache | Live webhook ingestion |
-| Single-user | In-memory result cache, asyncio.Lock | Redis + multi-tenant run isolation |
-| No streaming | Full pipeline completes before UI updates | SSE streaming per cluster label |
