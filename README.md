@@ -4,8 +4,6 @@ An AI-powered conversational analytics system that converts raw customer service
 
 Built to handle real production challenges like high-dimensional vector search degradation, data noise, PII exposure, and slow inference speeds.
 
-Live Demo: https://dodge-ai-task-lilac.vercel.app/
-
 ## What It Does
 
 Converts raw conversational text into structured intent clusters with dynamic topic descriptions. Scrubs PII (emails and phone numbers) and strips conversational filler words deterministically. Embeds customer queries into 384-dimensional semantic spaces via Sentence-Transformers, avoids the curse of dimensionality by projecting vectors to a lower-dimensional space before clustering, and groups similar messages dynamically without needing a pre-programmed cluster count. Uses an ultra-fast LLM API pipeline to generate action-oriented topic summaries for each cluster and performs dual-threshold batch sentiment classification over all conversations.
@@ -46,23 +44,6 @@ A React 18 and Tailwind CSS dashboard featuring interactive Recharts bar charts 
 
 ### 11. Performance Monitor
 Calculates and displays total ingested message count, cluster count, pipeline processing time in seconds, and message-per-second throughput.
-
-## Evaluation Results
-
-```
-Accuracy        94%    intent precision and cluster coherence
-Exact Match     88%    PII scrubbing and sentiment alignment
-Avg Latency     0.1s   cached path (in-memory cache retrieval)
-Avg Latency     4.8s   dynamic path (500 records ingest + embed + cluster + LLM)
-LLM Cost       $0.00   all API providers on free tier
-```
-
-| Category | Queries | Accuracy | Method |
-| :--- | :--- | :--- | :--- |
-| PII Sanitization (emails, phones, bots) | 500 | 100% | Compiled regex normalization |
-| Intent Clustering (UMAP + HDBSCAN) | 500 | 92% | Cosine projection + density grouping |
-| Topic Labeling (GPT-OSS-120B) | 12 | 100% | Groq API, prompt built once before retry loop |
-| Sentiment Scoring (DistilBERT-base) | 500 | 94% | Index-based map, dual-threshold confidence guards |
 
 ## Architecture
 
