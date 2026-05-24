@@ -63,11 +63,11 @@ def preprocess_conversations(messages: List[str]) -> List[str]:
         if cleaned in FILLER_PHRASES:
             continue
             
-        # 3. Filter messages with less than 5 words
-        words = cleaned.split()
-        if len(words) < 5:
+        # 3. Filter messages with fewer than 5 words.
+        # count(' ') + 1 is faster than split() because it avoids allocating a list.
+        if cleaned.count(" ") + 1 < 5:
             continue
-            
+
         cleaned_messages.append(cleaned)
         
     logger.info(f"Preprocessing completed. Kept {len(cleaned_messages)} out of {len(messages)} messages.")

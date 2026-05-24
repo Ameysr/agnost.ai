@@ -1,5 +1,7 @@
 import time
 import logging
+import asyncio
+from operator import attrgetter
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +33,10 @@ load_dotenv()
 
 # Global memory cache for pipeline results
 _analysis_cache: AnalysisResult | None = None
+
+# Prevents two simultaneous POST /api/analyze calls from running the full
+# pipeline concurrently (double UMAP + HDBSCAN + LLM calls).
+_pipeline_lock = asyncio.Lock()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,7 +94,14 @@ async def analyze(body: AnalyzeRequest = AnalyzeRequest()):
     7. Caches the result in memory
     """
     global _analysis_cache
-    
+
+    # Reject concurrent pipeline runs — prevents double UMAP/LLM execution
+    if _pipeline_lock.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="Pipeline is already running. Please wait for the current analysis to complete."
+        )
+
     # Assert models are preloaded successfully
     if not getattr(app.state, "models_loaded", False):
         logger.error("POST /api/analyze called but models not preloaded.")
@@ -99,109 +112,115 @@ async def analyze(body: AnalyzeRequest = AnalyzeRequest()):
         
     start_time = time.time()
     logger.info(f"Received request to run optimized pipeline with limit={body.limit}")
-    
-    try:
-        # Stage 1: Load Raw Dataset (uses local cache internally)
-        raw_queries = await run_in_threadpool(load_customer_support_dataset, limit=body.limit)
-        
-        # Stage 2: Preprocess & Filter (CPU-heavy, offloaded to thread pool)
-        clean_queries = await run_in_threadpool(preprocess_conversations, raw_queries)
-        if not clean_queries:
-            logger.warning("Preprocessing filtered out all raw queries.")
+
+    async with _pipeline_lock:
+        try:
+            # Stage 1: Load Raw Dataset (uses local NDJSON cache for O(limit) partial read)
+            raw_queries = await run_in_threadpool(load_customer_support_dataset, limit=body.limit)
+
+            # Stage 2: Preprocess & Filter (CPU-heavy, offloaded to thread pool)
+            clean_queries = await run_in_threadpool(preprocess_conversations, raw_queries)
+            if not clean_queries:
+                logger.warning("Preprocessing filtered out all raw queries.")
+                raise HTTPException(
+                    status_code=500,
+                    detail="All messages were filtered out during preprocessing. Check data quality or increase limit."
+                )
+
+            # Stage 3: Embedding generation (CPU/GPU-heavy, offloaded to thread pool)
+            embeddings = await run_in_threadpool(embed_messages, clean_queries)
+
+            # Stage 4: Dimensionality Reduction and Clustering (CPU-heavy, offloaded to thread pool)
+            clusters = await run_in_threadpool(cluster_messages, embeddings, clean_queries)
+
+            # Stage 5: Unified Bulk Sentiment scoring (single batch pass, offloaded to thread pool)
+            all_sentiments = await run_in_threadpool(analyze_messages_sentiment_bulk, clean_queries)
+
+            # Index-based sentiment lookup — avoids the duplicate-string key bug where
+            # two identical messages (e.g. "i need help") would overwrite each other in a dict.
+            # clusters stores message strings; we build a reverse index: message -> [indices]
+            # to correctly resolve sentiment even for duplicate messages.
+            message_to_indices: dict[str, list[int]] = {}
+            for i, msg in enumerate(clean_queries):
+                message_to_indices.setdefault(msg, []).append(i)
+
+            # Stage 6: Concurrent Async LLM Labeling (Network-bound, safe-throttled using asyncio)
+            labels = await label_all_clusters_async(clusters)
+
+            # Compile all cluster insights
+            insights = []
+            total_conversations = len(clean_queries)
+
+            for cluster_id, cluster_msgs in clusters.items():
+                count = len(cluster_msgs)
+                pct = round((count / total_conversations) * 100, 1)
+                sample_messages = cluster_msgs[:3]
+
+                label = labels.get(cluster_id, f"Cluster {cluster_id} - label unavailable")
+
+                # Aggregate sentiment using index-based lookup to handle duplicate messages correctly.
+                # Each message pops the next available index so duplicates each get their own result.
+                pos_count = 0
+                neg_count = 0
+                for msg in cluster_msgs:
+                    indices = message_to_indices.get(msg, [])
+                    idx = indices.pop(0) if indices else None
+                    if idx is not None:
+                        res = all_sentiments[idx]
+                    else:
+                        res = {"label": "POSITIVE", "score": 0.51}
+                    if "POSITIVE" in res["label"].upper():
+                        pos_count += 1
+                    else:
+                        neg_count += 1
+
+                cluster_len = len(cluster_msgs)
+                pos_pct = round((pos_count / cluster_len) * 100, 1) if cluster_len > 0 else 0.0
+                neg_pct = round((neg_count / cluster_len) * 100, 1) if cluster_len > 0 else 0.0
+
+                if neg_pct > 60.0:
+                    overall_sentiment = "negative"
+                elif pos_pct > 60.0:
+                    overall_sentiment = "positive"
+                else:
+                    overall_sentiment = "mixed"
+
+                insight = ClusterInsight(
+                    cluster_id=cluster_id,
+                    label=label,
+                    message_count=count,
+                    percentage_of_total=pct,
+                    sentiment=overall_sentiment,
+                    positive_pct=pos_pct,
+                    negative_pct=neg_pct,
+                    sample_messages=sample_messages
+                )
+                insights.append(insight)
+
+            # Sort by volume descending — attrgetter is faster than a lambda (C-level vs bytecode)
+            insights.sort(key=attrgetter("message_count"), reverse=True)
+
+            duration = round(time.time() - start_time, 2)
+
+            result = AnalysisResult(
+                total_conversations=total_conversations,
+                total_clusters=len(clusters),
+                processing_time_seconds=duration,
+                insights=insights
+            )
+
+            _analysis_cache = result
+            logger.info(f"Pipeline executed successfully in {duration}s. Results cached.")
+            return result
+
+        except HTTPException as he:
+            raise he
+        except Exception as e:
+            logger.exception("An unhandled exception occurred in the analytical pipeline.")
             raise HTTPException(
                 status_code=500,
-                detail="All messages were filtered out during preprocessing. Check data quality or increase limit."
+                detail=f"Pipeline processing failed: {str(e)}"
             )
-            
-        # Stage 3: Embedding generation (CPU/GPU-heavy, offloaded to thread pool)
-        embeddings = await run_in_threadpool(embed_messages, clean_queries)
-        
-        # Stage 4: Dimensionality Reduction and Clustering (CPU-heavy, offloaded to thread pool)
-        clusters = await run_in_threadpool(cluster_messages, embeddings, clean_queries)
-        
-        # Stage 5: Unified Bulk Sentiment scoring (Inference bulk batch pass offloaded to thread pool)
-        all_sentiments = await run_in_threadpool(analyze_messages_sentiment_bulk, clean_queries)
-        
-        # Map each query string back to its predicted sentiment dict
-        sentiment_map = {msg: res for msg, res in zip(clean_queries, all_sentiments)}
-        
-        # Stage 6: Concurrent Async LLM Labeling (Network-bound, safe-throttled using asyncio)
-        labels = await label_all_clusters_async(clusters)
-        
-        # Compile all cluster insights
-        insights = []
-        total_conversations = len(clean_queries)
-        
-        for cluster_id, cluster_msgs in clusters.items():
-            count = len(cluster_msgs)
-            pct = round((count / total_conversations) * 100, 1)
-            sample_messages = cluster_msgs[:3]
-            
-            # Lookup concurrent async generated label
-            label = labels.get(cluster_id, f"Cluster {cluster_id} - label unavailable")
-            
-            # Aggregate preloaded bulk sentiment records for messages in this cluster
-            pos_count = 0
-            neg_count = 0
-            for msg in cluster_msgs:
-                res = sentiment_map.get(msg, {"label": "POSITIVE"})
-                label_val = res["label"].upper()
-                if "POSITIVE" in label_val:
-                    pos_count += 1
-                else:
-                    neg_count += 1
-                    
-            cluster_len = len(cluster_msgs)
-            pos_pct = round((pos_count / cluster_len) * 100, 1) if cluster_len > 0 else 0.0
-            neg_pct = round((neg_count / cluster_len) * 100, 1) if cluster_len > 0 else 0.0
-            
-            # Define overall sentiment class based on 60% thresholds
-            if neg_pct > 60.0:
-                overall_sentiment = "negative"
-            elif pos_pct > 60.0:
-                overall_sentiment = "positive"
-            else:
-                overall_sentiment = "mixed"
-                
-            insight = ClusterInsight(
-                cluster_id=cluster_id,
-                label=label,
-                message_count=count,
-                percentage_of_total=pct,
-                sentiment=overall_sentiment,
-                positive_pct=pos_pct,
-                negative_pct=neg_pct,
-                sample_messages=sample_messages
-            )
-            insights.append(insight)
-            
-        # Sort insights by volume (message_count) descending
-        insights.sort(key=lambda x: x.message_count, reverse=True)
-        
-        # Compute processing duration
-        duration = round(time.time() - start_time, 2)
-        
-        # Build response payload
-        result = AnalysisResult(
-            total_conversations=total_conversations,
-            total_clusters=len(clusters),
-            processing_time_seconds=duration,
-            insights=insights
-        )
-        
-        # Cache results in-memory
-        _analysis_cache = result
-        logger.info(f"Optimized pipeline executed successfully in {duration}s. Results cached.")
-        return result
-        
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        logger.exception("An unhandled exception occurred in the analytical pipeline.")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Pipeline processing failed: {str(e)}"
-        )
 
 @app.get("/api/insights", response_model=AnalysisResult)
 async def get_insights():

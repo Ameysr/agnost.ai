@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 from typing import Dict, List
 import numpy as np
 from fastapi import HTTPException
@@ -22,13 +23,15 @@ def cluster_messages(embeddings: np.ndarray, clean_messages: List[str]) -> Dict[
     
     try:
         # Step 1: Dimensionality Reduction using UMAP
-        # HDBSCAN suffers in high-dimensional spaces (384 dims) due to the curse of dimensionality
-        logger.info("Applying UMAP dimensionality reduction (n_components=5, n_neighbors=15, metric='cosine')")
-        
-        # We set random_state for reproducible clustering results
+        # HDBSCAN suffers in high-dimensional spaces (384 dims) due to the curse of dimensionality.
+        # n_neighbors is scaled proportionally to dataset size so the local neighborhood
+        # is meaningful at both small (100) and large (5000+) query counts.
+        n_neighbors = min(15, max(5, len(clean_messages) // 10))
+        logger.info(f"Applying UMAP (n_components=5, n_neighbors={n_neighbors}, metric='cosine')")
+
         reducer = umap.UMAP(
             n_components=5,
-            n_neighbors=15,
+            n_neighbors=n_neighbors,
             min_dist=0.0,
             metric="cosine",
             random_state=42
@@ -87,17 +90,15 @@ def cluster_messages(embeddings: np.ndarray, clean_messages: List[str]) -> Dict[
             # Determine dynamic number of clusters: k = sqrt(total_items / 6), bounded between 3 and 10
             k = int(np.clip(np.sqrt(total_items / 6), 3, 10))
             logger.info(f"Executing KMeans fallback with K={k} clusters...")
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto")
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
             cluster_labels = kmeans.fit_predict(reduced_embeddings)
             logger.info("KMeans fallback clustering completed successfully (no noise categories produced).")
             
-        # Group messages by their cluster ID
-        clusters: Dict[int, List[str]] = {}
+        # Group messages by their cluster ID using defaultdict to avoid
+        # a per-iteration key existence check.
+        clusters: Dict[int, List[str]] = defaultdict(list)
         for idx, label in enumerate(cluster_labels):
-            cluster_id = int(label)
-            if cluster_id not in clusters:
-                clusters[cluster_id] = []
-            clusters[cluster_id].append(clean_messages[idx])
+            clusters[int(label)].append(clean_messages[idx])
             
         # Summarize cluster statistics
         logger.info(f"Clustering completed. Found {len(clusters)} clusters.")

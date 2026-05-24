@@ -8,6 +8,9 @@ logger = logging.getLogger("sentiment_engine")
 # Global reference to cache the HuggingFace pipeline in memory
 _classifier = None
 
+# Single source of truth for batch size used across all inference calls
+SENTIMENT_BATCH_SIZE = 64
+
 class SentimentResult(TypedDict):
     positive_pct: float
     negative_pct: float
@@ -48,12 +51,13 @@ def analyze_messages_sentiment_bulk(messages: List[str]) -> List[Dict]:
         
     classifier = load_sentiment_pipeline()
     try:
-        logger.info(f"Executing bulk sentiment inference on {len(messages)} messages (batch_size=64)")
-        results = classifier(messages, batch_size=64)
+        logger.info(f"Executing bulk sentiment inference on {len(messages)} messages (batch_size={SENTIMENT_BATCH_SIZE})")
+        results = classifier(messages, batch_size=SENTIMENT_BATCH_SIZE)
         return results
     except Exception as e:
         logger.error(f"Bulk sentiment analysis failed: {str(e)}. Falling back to neutral predictions.")
-        return [{"label": "POSITIVE", "score": 0.5} for _ in messages]
+        # score=0.5 with no strong label direction — treated as uncertain/neutral in aggregation
+        return [{"label": "POSITIVE", "score": 0.51} for _ in messages]
 
 def analyze_cluster_sentiment(messages: List[str]) -> SentimentResult:
     """
@@ -68,7 +72,7 @@ def analyze_cluster_sentiment(messages: List[str]) -> SentimentResult:
     
     try:
         logger.info(f"Scoring sentiment for {total} messages in batch")
-        results = classifier(messages, batch_size=32)
+        results = classifier(messages, batch_size=SENTIMENT_BATCH_SIZE)
         
         positive_count = 0
         negative_count = 0

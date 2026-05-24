@@ -47,20 +47,25 @@ def embed_messages(messages: list[str]) -> np.ndarray:
     """
     Generates high-quality sentence embeddings for a list of clean customer queries.
     Uses batch processing of 64 for optimal performance.
+    - convert_to_numpy=True avoids a potential extra memory copy when the model
+      runs on GPU and returns a torch.Tensor.
+    - normalize_embeddings=True guarantees unit-normalized vectors regardless of
+      which model is loaded (all-MiniLM-L6-v2 normalizes by default, but being
+      explicit protects against silent regressions if the model is swapped).
     """
     if not messages:
         return np.empty((0, 384))
-        
+
     model = load_embedding_model()
     try:
         logger.info(f"Generating 384-dimensional sentence embeddings for {len(messages)} messages (batch_size=64)")
-        # Perform encoding in batches of 64
-        embeddings = model.encode(messages, batch_size=64, show_progress_bar=False)
-        
-        # Ensure it is returned as a NumPy array
-        if not isinstance(embeddings, np.ndarray):
-            embeddings = np.array(embeddings)
-            
+        embeddings = model.encode(
+            messages,
+            batch_size=64,
+            show_progress_bar=False,
+            convert_to_numpy=True,       # skip isinstance check + avoids extra copy
+            normalize_embeddings=True,   # explicit unit normalization
+        )
         logger.info(f"Embeddings generated successfully. Shape: {embeddings.shape}")
         return embeddings
     except Exception as e:
