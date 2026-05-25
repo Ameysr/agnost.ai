@@ -1,0 +1,34 @@
+services:
+  backend:
+    build:
+      context: ./sentiment-engine/backend
+    ports:
+      - "8050:8050"
+    env_file:
+      - ./sentiment-engine/backend/.env
+    # HuggingFace model cache is persisted across container restarts
+    # so models are not re-downloaded every time
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  frontend:
+    build:
+      context: ./sentiment-engine/frontend
+      args:
+        # Points the compiled frontend bundle at the backend container.
+        # On the host machine the backend is reachable at localhost:8050.
+        VITE_API_URL: http://localhost:8050
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  huggingface_cache:

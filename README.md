@@ -93,6 +93,35 @@ Calculates and displays total ingested message count, cluster count, pipeline pr
 
 ## Running Instructions
 
+### One Command Setup with Docker
+
+The fastest way to run the full stack. Requires Docker and Docker Compose.
+
+```bash
+# 1. Clone the repo and enter the project root
+git clone <repo-url>
+cd agnost.ai
+
+# 2. Add your Groq API key to the backend env file
+cp sentiment-engine/backend/.env.example sentiment-engine/backend/.env
+# Edit sentiment-engine/backend/.env and set GROQ_API_KEY=gsk_your_key_here
+
+# 3. Start everything
+docker compose up --build
+```
+
+That's it. Docker builds both containers, installs all dependencies, and starts the services.
+
+On first startup the backend downloads the DistilBERT and MiniLM models from HuggingFace (~500MB total). This takes 2-5 minutes once. The HuggingFace cache is stored in a named Docker volume so subsequent `docker compose up` runs skip the download entirely.
+
+Once the backend prints `All heavy pipeline ML models successfully loaded into memory and ready`, the frontend is available at `http://localhost:5173`.
+
+To stop everything: `docker compose down`
+
+To stop and wipe the model cache volume: `docker compose down -v`
+
+### Manual Setup (without Docker)
+
 ### Prerequisites
 
 Python 3.11+, Node.js 18+ and npm, and a Groq API key from [console.groq.com](https://console.groq.com).
